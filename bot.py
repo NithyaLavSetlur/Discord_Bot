@@ -1,10 +1,8 @@
 import discord
 from discord.ext import commands
+from discord import app_commands  # For application commands
 from openai import OpenAI
 import aiohttp
-import pytesseract
-from PIL import Image
-import io
 
 # Bot setup with necessary permissions
 intents = discord.Intents.default()
@@ -22,10 +20,13 @@ client = OpenAI(base_url="https://api.zukijourney.com/v1", api_key="zu-14cbdc74f
 @bot.event
 async def on_ready():
     print(f"Logged in as {bot.user}")
+    # Register application commands once the bot is ready
+    await bot.tree.sync()
 
-# Command to check math answers (text-based)
-@bot.command()
-async def check(ctx, *, question_and_answer):
+# Slash Command: AI interaction
+@bot.tree.command(name="ai", description="Interact with the AI to check math solutions")
+async def ai_interaction(interaction: discord.Interaction, question_and_answer: str):
+    # Sending request to AI API
     response = client.chat.completions.create(
         model="gpt-3.5-turbo",
         messages=[
@@ -35,58 +36,15 @@ async def check(ctx, *, question_and_answer):
     )
 
     evaluation = response.choices[0].message.content
-    await ctx.send(f"Math check result:\n```latex\n{evaluation}\n```")
+
+    # Send back AI evaluation
+    await interaction.response.send_message(f"Math check result:\n```latex\n{evaluation}\n```")
 
     # React to correctness
     if "incorrect" in evaluation.lower():
-        await ctx.message.add_reaction("❌")
+        await interaction.message.add_reaction("❌")
     else:
-        await ctx.message.add_reaction("✅")
-
-# Event: Detect images, extract math, and check correctness
-@bot.event
-async def on_message(message):
-    if message.author == bot.user:
-        return  # Ignore bot's own messages
-
-    if message.attachments:  # If message contains an image
-        for attachment in message.attachments:
-            if any(attachment.filename.lower().endswith(ext) for ext in ["png", "jpg", "jpeg"]):
-                await message.channel.send("Processing image... ⏳")
-                
-                async with aiohttp.ClientSession() as session:
-                    async with session.get(attachment.url) as response:
-                        image_data = await response.read()
-
-                # Convert image to text using OCR
-                image = Image.open(io.BytesIO(image_data))
-                extracted_text = pytesseract.image_to_string(image)
-
-                if not extracted_text.strip():
-                    await message.channel.send("❌ Could not extract text from the image.")
-                    return
-
-                await message.channel.send(f"Extracted LaTeX from image:\n```latex\n{extracted_text}\n```")
-
-                # Check extracted math solution
-                api_response = client.chat.completions.create(
-                    model="gpt-3.5-turbo",
-                    messages=[
-                        {"role": "system", "content": "Check if the user's math solution is correct. If incorrect, suggest a corrected LaTeX version."},
-                        {"role": "user", "content": f"Check this math working out:\n{extracted_text}"}
-                    ]
-                )
-
-                evaluation = api_response.choices[0].message.content
-                await message.channel.send(f"Math check result:\n```latex\n{evaluation}\n```")
-
-                # React to correctness
-                if "incorrect" in evaluation.lower():
-                    await message.add_reaction("❌")
-                else:
-                    await message.add_reaction("✅")
-
-    await bot.process_commands(message)  # Process commands
+        await interaction.message.add_reaction("✅")
 
 # Run the bot
 bot.run("MTM0MDI2NzE0ODcyMjgzMTQzMA.G5sJ2G.6sbWHqneSAgpvDTaUWfHnssLlRX0SkwrZQEtSw")
