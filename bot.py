@@ -3,9 +3,11 @@ from discord.ext import commands
 from discord import app_commands
 from openai import OpenAI
 import aiohttp
+import aiodns
 import pytesseract
 from PIL import Image
 import io
+import asyncio 
 
 # add the ability to respond in latex and convert that latex into images for easier representation
 # below somewhere is a suggestion about creating threads for better learning (not immediately providing question solution if the user provides their own solution and it is incorrect)
