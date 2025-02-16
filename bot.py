@@ -8,12 +8,16 @@ import asyncio
 import pytesseract
 from PIL import Image
 import io
+import sys
 
 # add the ability to respond in latex and convert that latex into images for easier representation
 # below somewhere is a suggestion about creating threads for better learning (not immediately providing question solution if the user provides their own solution and it is incorrect)
 # if user is correct, assign them a point (this should be cumulative)
 # enhance functionality of what is a correct and incorrect answer, as there are errors around that currently --> this is also affecting the tick/cross reactions
 # only if image uploaded is uploaded in a certain channel should the bot respond to the image --> same with messagess (we don't want the bot responding all over the server lol)
+
+if sys.platform == 'win32':
+    asyncio.set_event_loop_policy(asyncio.WindowsSelectorEventLoopPolicy())
 
 # Bot setup with necessary permissions
 intents = discord.Intents.default()
