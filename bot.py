@@ -32,7 +32,10 @@ intents.guilds = True
 intents.reactions = True
 
 bot = commands.Bot(command_prefix=COMMAND_PREFIX, intents=intents)
-client = OpenAI(base_url="https://api.zukijourney.com/v1", api_key="zu-14cbdc74fc6e5cdcbc2336b96fda2680")
+client = OpenAI(
+    base_url="https://api.zukijourney.com/v1",
+    api_key=os.getenv("OPENAI_API_KEY")
+)
 
 # === ON READY ===
 @bot.event
