@@ -3,44 +3,50 @@ from discord.ext import commands
 from discord import app_commands
 from openai import OpenAI
 import aiohttp
-import aiodns
-import asyncio 
 import pytesseract
 from PIL import Image
 import io
+import asyncio
+import os
 import sys
+from asyncio import WindowsSelectorEventLoopPolicy
+from dotenv import load_dotenv
 
-# add the ability to respond in latex and convert that latex into images for easier representation
-# below somewhere is a suggestion about creating threads for better learning (not immediately providing question solution if the user provides their own solution and it is incorrect)
-# if user is correct, assign them a point (this should be cumulative)
-# enhance functionality of what is a correct and incorrect answer, as there are errors around that currently --> this is also affecting the tick/cross reactions
-# only if image uploaded is uploaded in a certain channel should the bot respond to the image --> same with messagess (we don't want the bot responding all over the server lol)
+# Load environment variables from .env file
+load_dotenv()
 
+# Protect against Windows event loop error
 if sys.platform == 'win32':
-    asyncio.set_event_loop_policy(asyncio.WindowsSelectorEventLoopPolicy())
+    asyncio.set_event_loop_policy(WindowsSelectorEventLoopPolicy())
 
-# Bot setup with necessary permissions
+# === CONFIG ===
+COMMAND_PREFIX = "!"
+TARGET_GUILD_ID = 1340605014523117620  # Replace with your actual test guild/server ID
+TARGET_IMAGE_CHANNEL_ID = 123456789012345678  # Replace with the channel ID where images are allowed
+
+# === BOT SETUP ===
 intents = discord.Intents.default()
-intents.messages = True
 intents.message_content = True
+intents.messages = True
 intents.guilds = True
 intents.reactions = True
-intents.members = True  # If you need to track member updates
 
-bot = commands.Bot(command_prefix="!", intents=intents)
-
-# Zukijourney API setup
+bot = commands.Bot(command_prefix=COMMAND_PREFIX, intents=intents)
 client = OpenAI(base_url="https://api.zukijourney.com/v1", api_key="zu-14cbdc74fc6e5cdcbc2336b96fda2680")
 
-# Event: Bot is ready
+# === ON READY ===
 @bot.event
 async def on_ready():
-    print(f"Logged in as {bot.user}")
-    # Register application commands once the bot is ready
-    await bot.tree.sync()
+    print(f"✅ Logged in as {bot.user}")
+    try:
+        guild = discord.Object(id=TARGET_GUILD_ID)
+        synced = await bot.tree.sync(guild=guild)
+        print(f"✅ Synced {len(synced)} slash command(s) to test guild.")
+    except Exception as e:
+        print(f"❌ Failed to sync commands: {e}")
 
-# Function to process OCR on images
-async def process_image(image_url: str):
+# === IMAGE PROCESSING FUNCTION ===
+async def process_image(image_url: str) -> str:
     async with aiohttp.ClientSession() as session:
         async with session.get(image_url) as resp:
             img_data = await resp.read()
@@ -48,65 +54,96 @@ async def process_image(image_url: str):
             text = pytesseract.image_to_string(img)
             return text
 
-# Slash Command: AI interaction
-@bot.tree.command(name="ai", description="Interact with the AI to check math solutions")
-async def ai_interaction(interaction: discord.Interaction, question_and_answer: str):
-    # Sending request to AI API
+# === SLASH COMMAND: /ai ===
+@bot.tree.command(name="ai", description="Check your math solution with AI")
+@app_commands.describe(question_and_answer="Your question and/or solution")
+async def ai(interaction: discord.Interaction, question_and_answer: str):
+    await interaction.response.defer()  # Acknowledge immediately to avoid timeout
+
+    print("🧠 Received /ai interaction")
+
     response = client.chat.completions.create(
         model="gpt-3.5-turbo",
         messages=[
-            {"role": "system", "content": "Answer the user's math question if they haven't provided a solution."},
-            {"role": "system", "content": "If the user has provided a question and solution, check if the user's math solution is correct. If incorrect, suggest a corrected LaTeX version."}, #if incorrect the bot should create a public thread that it replies in with suggestions of how to correct the answer, then the user should edit their response until they are fully correct --> this functionality should be able to work for text and image answers (for questions, it should just solve it provide the solution right under)
-            {"role": "user", "content": f"Check this math working out/question:\n{question_and_answer}"}
+            {"role": "system", "content": (
+                "If a question is provided without a solution, solve it using LaTeX. "
+                "If a full solution is provided, verify it. If incorrect, give a corrected version using LaTeX."
+            )},
+            {"role": "user", "content": question_and_answer}
         ]
     )
 
     evaluation = response.choices[0].message.content
 
-    # Send back AI evaluation without a code block (as a normal message)
-    await interaction.response.send_message(f"Math check result:\n{evaluation}")
+    await interaction.followup.send(f"📊 Math Check Result:\n```latex\n{evaluation}\n```")
 
-    # React to correctness
+    # React based on evaluation
     if "incorrect" in evaluation.lower():
-        await interaction.message.add_reaction("❌")
+        await interaction.channel.send("❌ Your solution appears incorrect.")
     else:
-        await interaction.message.add_reaction("✅")
+        await interaction.channel.send("✅ Correct!")
 
-# Event to handle images in messages
+# === COMMAND: !check (text message based) ===
+@bot.command()
+async def check(ctx, *, question_and_answer):
+    response = client.chat.completions.create(
+        model="gpt-3.5-turbo",
+        messages=[
+            {"role": "system", "content": "Check the solution for correctness. If incorrect, suggest a corrected LaTeX version."},
+            {"role": "user", "content": question_and_answer}
+        ]
+    )
+
+    evaluation = response.choices[0].message.content
+    await ctx.send(f"📊 Math Check Result:\n```latex\n{evaluation}\n```")
+
+    # React
+    if "incorrect" in evaluation.lower():
+        await ctx.message.add_reaction("❌")
+    else:
+        await ctx.message.add_reaction("✅")
+
+# === IMAGE OCR & EVALUATION ===
 @bot.event
 async def on_message(message):
     if message.author == bot.user:
         return
 
-    if message.attachments:
+    # Only handle image processing in specific channel
+    if message.channel.id == TARGET_IMAGE_CHANNEL_ID and message.attachments:
         for attachment in message.attachments:
-            if attachment.content_type.startswith("image"):
-                # Process the image using OCR
-                image_text = await process_image(attachment.url)
-                if image_text.strip():
-                    # Send extracted text to the AI for evaluation
-                    response = client.chat.completions.create(
-                        model="gpt-3.5-turbo",
-                        messages=[
-                            {"role": "system", "content": "Answer the user's math question if they haven't provided a solution."},
-                            {"role": "system", "content": "If the user has provided a question and solution, check if the user's math solution is correct. If incorrect, suggest a corrected LaTeX version."},
-                            {"role": "user", "content": f"Check this math working out/question:\n{image_text}"}
-                        ]
-                    )
+            if attachment.filename.lower().endswith(("png", "jpg", "jpeg")):
+                await message.channel.send("🔍 Processing image...")
+                extracted_text = await process_image(attachment.url)
 
-                    evaluation = response.choices[0].message.content
-                    await message.channel.send(f"Math check result for image:\n{evaluation}")
+                if not extracted_text.strip():
+                    await message.channel.send("❌ Could not extract any text.")
+                    return
 
-                    # React to correctness
-                    if "incorrect" in evaluation.lower():
-                        await message.add_reaction("❌")
-                    else:
-                        await message.add_reaction("✅")
+                await message.channel.send(f"📤 Extracted Text:\n```latex\n{extracted_text}\n```")
+
+                # Evaluate the OCR text
+                response = client.chat.completions.create(
+                    model="gpt-3.5-turbo",
+                    messages=[
+                        {"role": "system", "content": "Check the extracted math solution for correctness. Use LaTeX formatting."},
+                        {"role": "user", "content": extracted_text}
+                    ]
+                )
+                evaluation = response.choices[0].message.content
+
+                await message.channel.send(f"📊 Math Check Result:\n```latex\n{evaluation}\n```")
+
+                if "incorrect" in evaluation.lower():
+                    await message.add_reaction("❌")
                 else:
-                    await message.channel.send("No readable text found in the image.")
+                    await message.add_reaction("✅")
 
-    # Allow commands to be processed by the bot
     await bot.process_commands(message)
 
-# Run the bot
-bot.run("MTM0MDI2NzE0ODcyMjgzMTQzMA.G5sJ2G.6sbWHqneSAgpvDTaUWfHnssLlRX0SkwrZQEtSw")
+# === RUN THE BOT ===
+if __name__ == "__main__":
+    TOKEN = os.getenv("DISCORD_BOT_TOKEN")
+    if not TOKEN:
+        raise Exception("❌ DISCORD_BOT_TOKEN environment variable not set.")
+    bot.run(TOKEN)
